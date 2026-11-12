@@ -1,0 +1,12 @@
+# secrets and runtime state
+cookies.json
+cookie*.json
+cookies.txt
+cookie.txt
+*.log
+*-state.json
+
+# local test artifacts
+node_modules/
+.DS_Store
+Thumbs.db
