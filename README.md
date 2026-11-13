@@ -1,86 +1,90 @@
-# NodeLoc 阅读时长后台助手
+**English** | [简体中文](README.zh-CN.md)
 
-目标：把 NodeLoc 的「阅读时长」按正常阅读节奏累计到 600 分钟（默认目标，可改）。
+# NodeLoc Reading-Time Background Helper
 
-## 推荐：Tampermonkey 用户脚本
+Accumulate NodeLoc reading time at a natural reading pace up to 600 minutes by default. The target can be changed in the script configuration.
 
-文件：`nodeloc-readtime.user.js`
+> This project is intended for personal account testing and automation experiments. Use it only with an account you control and follow the target site's rules.
 
-### 方式 A：最快启动（不装脚本）
+## Recommended: Tampermonkey userscript
 
-1. 打开 NodeLoc 任意页面并确认已登录。
-2. 按 `F12` 打开开发者工具，切到 Console。
-3. 把 `nodeloc-readtime.user.js` 的全部内容粘贴进去，按 Enter。
-4. Console 可以关闭，脚本会继续在当前标签页里运行；页面右下角有进度面板。
+File: `nodeloc-readtime.user.js`
 
-如果你习惯书签：把 `nodeloc-readtime.bookmarklet.txt` 里的整行内容保存成一个书签，在 NodeLoc 页面点这个书签即可启动。
+### Option A: Quick start without Tampermonkey
 
-这种方式刷新页面后要重新启动。需要长期运行就用下面的方式 B。
+1. Open any NodeLoc page and make sure you are signed in.
+2. Press `F12`, open the Console tab.
+3. Paste the full contents of `nodeloc-readtime.user.js` and press Enter.
+4. You can close the Console. The script keeps running in the current tab and shows a progress panel in the bottom-right corner.
 
-### 方式 B：Tampermonkey（刷新后仍自动运行）
+If you prefer bookmarks, save the line in `nodeloc-readtime.bookmarklet.txt` as a bookmark and click it while on a NodeLoc page.
 
-1. 打开 Edge 的 Tampermonkey 管理面板。
-2. 新建脚本，把 `nodeloc-readtime.user.js` 的内容完整粘进去并保存。
-3. 打开/刷新 `https://www.nodeloc.com/latest`，脚本会自动开始；页面右下角显示当前进度。
-4. 可以正常切到其他标签页或最小化窗口，**不要关闭这个 NodeLoc 标签页**；电脑不要睡眠。
+This method stops when the page is refreshed. Use Option B for long-running sessions.
 
-这个脚本使用当前浏览器已有的登录态，不需要复制 Cookie。它只做三件事：
+### Option B: Tampermonkey (auto-starts after refresh)
 
-- 每次随机等 58–76 秒；
-- 从真实话题列表里选一个帖子，提交一次正常的 `/topics/timings` 计时；
-- 每 3–5 分钟换一个话题，并在触发 429 时按 `Retry-After` 自动退避。
+1. Open the Tampermonkey dashboard in Edge.
+2. Create a new script, paste the full contents of `nodeloc-readtime.user.js`, and save it.
+3. Open or refresh `https://www.nodeloc.com/latest`. The script starts automatically and shows its progress in the bottom-right corner.
+4. You can switch to other tabs or minimize the window. **Keep the NodeLoc tab open** and prevent the computer from sleeping.
 
-## 后台 CLI（不依赖浏览器标签页）
+The userscript uses your existing browser session, so no Cookie export is needed. It only does three things:
 
-文件：`nodeloc-readtime.mjs`
+- waits a random 58–76 seconds between requests;
+- picks a real topic and submits one normal `/topics/timings` event;
+- switches topics every 3–5 minutes and backs off according to `Retry-After` on HTTP 429.
 
-适合想完全脱离浏览器运行的情况。先在 NodeLoc 页面打开 Cookie-Editor，点 **Export → JSON**，把导出文件保存到本目录并命名为 `cookies.json`，然后：
+## Background CLI (no browser tab required)
+
+File: `nodeloc-readtime.mjs`
+
+Use this when you want the process to run independently of a browser tab. In the NodeLoc page, open Cookie-Editor, choose **Export → JSON**, save the export as `cookies.json` in this directory, then run:
 
 ```powershell
 cd nodeloc-readtime
 node .\nodeloc-readtime.mjs --cookie-file .\cookies.json
 ```
 
-或者双击：
+Or double-click:
 
 ```text
 start-background.cmd
 ```
 
-启动后是隐藏的 Node 进程，**可以关掉 NodeLoc 页面、切去用别的软件**；它不占用鼠标键盘。
+It starts a hidden Node process. **You can close the NodeLoc page and use other applications**; it does not occupy your mouse or keyboard.
 
-停止后台进程：
+Stop the background process:
 
 ```powershell
 .\stop-background.ps1
 ```
 
-它会用隐藏窗口启动 Node 进程，日志写到 `nodeloc-readtime.log`，进度写到 `nodeloc-readtime-state.json`。
+Logs are written to `nodeloc-readtime.log`, and progress is written to `nodeloc-readtime-state.json`.
 
-## 风控与稳定性设计
+## Anti-Abuse and Stability Design
 
-NodeLoc 的风控通常会综合看请求频率、计时真实性、行为规律、账号与设备关联、互动异常等信号。这个项目不做并发硬刷，主要按“降低异常度”处理：
+NodeLoc's anti-abuse checks generally combine request frequency, timing authenticity, behavioral patterns, account/device correlation, and abnormal interaction signals. This project avoids concurrent hard-flooding and focuses on reducing anomaly signals:
 
-| 风控维度 | 脚本采取的措施 |
+| Signal | What the script does |
 |---|---|
-| 请求频率 | 默认每次随机等待 58–76 秒，单实例串行提交，不做 1 秒一次或并发请求 |
-| 计时分布 | `topic_time` 在 45–59.5 秒内随机波动，不会所有请求都完全一致 |
-| 数据合法性 | 从 `/latest.json` 取真实话题，按 `posts_count` 生成合法楼层号，避免无效帖号被丢弃 |
-| 行为规律 | 每个话题连续阅读 3–5 次后切换，并真实请求话题页，模拟正常浏览节奏 |
-| 账号关联 | 单账号、单标签运行；页面内用 leader 锁避免多个标签同时提交 |
-| 互动异常 | 只提交阅读计时，不自动点赞、回复、关注或发帖 |
-| 服务端限速 | 遇到 429 时读取 `Retry-After` 并随机退避，不连续撞限速 |
-| 目标控制 | 达到 600 分钟后自动停止，不无限挂机 |
+| Request frequency | Waits a random 58–76 seconds between requests; one serial instance only, with no one-second loops or concurrency |
+| Timing distribution | Randomizes `topic_time` between 45–59.5 seconds instead of using identical values |
+| Data validity | Reads real topics from `/latest.json` and generates valid post numbers from `posts_count` so invalid posts are not dropped |
+| Behavioral pattern | Reads 3–5 times per topic before switching and requests the topic page to imitate normal browsing |
+| Account correlation | One account and one tab; a leader lock prevents multiple tabs from submitting at the same time |
+| Interaction anomalies | Reading timings only; no automatic likes, replies, follows, or posts |
+| Server rate limits | Handles HTTP 429 with `Retry-After` plus randomized backoff instead of repeatedly hitting the limit |
+| Target control | Stops automatically after the 600-minute target instead of running indefinitely |
 
-补充说明：
+Additional notes:
 
-- 阅读时长由服务端按两次计时请求之间的真实经过时间累计，单账号一分钟通常只能累计约一分钟，不能靠伪造 `topic_time` 跳变。
-- 上述措施只能降低异常度，不能保证完全不触发风控；账号年龄、常用 IP、设备环境和多账号情况同样会影响判断。
-- 最稳妥的使用方式是：一个账号、一个浏览器、一个标签页、常用网络环境，达到目标就停止，不要多账号同时运行。
+- Reading time is accumulated by the server from the real elapsed time between timing requests. One account can normally accumulate about one minute per minute; forged `topic_time` values do not create a valid jump.
+- These measures can only reduce anomaly signals, not guarantee that no anti-abuse rule is triggered. Account age, usual IP, device environment, and multi-account behavior also affect the result.
+- The safest operating pattern is one account, one browser, one tab, a familiar network environment, and stopping when the target is reached.
 
-## 说明
+## Notes
 
-- NodeLoc 的阅读时长按服务端实际经过时间累计，单账号一分钟只能累计约一分钟；脚本不会用并发请求硬刷，避免触发风控。
-- 默认目标 600 分钟。当前进度会自动读取，达到后停止。
-- 只运行一个实例/一个标签页；多个实例同时跑容易被限速。
-- 如果页面提示未登录，先在浏览器正常登录 NodeLoc，再刷新页面。
+- NodeLoc reading time is based on real server-side elapsed time. One account can normally accumulate about one minute per minute; the script does not hard-flood with concurrent requests.
+- The default target is 600 minutes. Current progress is read automatically and the script stops when the target is reached.
+- Run only one instance or one tab; multiple instances are likely to hit rate limits.
+- If the page says you are not signed in, sign in normally in the browser and refresh the page.
