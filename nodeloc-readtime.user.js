@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NodeLoc 阅读时长后台助手（稳妥版）
 // @namespace    local.nodeloc.readtime
-// @version      1.0.0
+// @version      1.0.1
 // @description  用真实帖子和低频率计时请求，在后台缓慢累计 NodeLoc 阅读时长。单标签运行，遇 429 自动退避。
 // @match        https://www.nodeloc.com/*
 // @run-at       document-idle
@@ -22,7 +22,8 @@
     sessionMinTicks: 3,
     sessionMaxTicks: 5,
     summaryEveryMs: 5 * 60 * 1000,
-    leaderTtlMs: 150000,
+    leaderTtlMs: 30000,
+    leaderHeartbeatMs: 10000,
     debug: true
   };
 
@@ -65,6 +66,7 @@
   let lastError = '';
   let nextTickAt = 0;
   let tickTimer = null;
+  let heartbeatTimer = null;
   let lastTickAt = 0;
 
   function log(...args) {
@@ -272,26 +274,48 @@
     renderPanel();
   }
 
-  function leaderAlive() {
+  function readLock() {
     try {
-      const lock = JSON.parse(localStorage.getItem(LEADER_KEY) || 'null');
-      return lock && lock.id !== TAB_ID && Number(lock.until) > Date.now();
+      return JSON.parse(localStorage.getItem(LEADER_KEY) || 'null');
     } catch (_) {
-      return false;
+      return null;
     }
+  }
+
+  function writeLock() {
+    const now = Date.now();
+    localStorage.setItem(LEADER_KEY, JSON.stringify({ id: TAB_ID, until: now + CFG.leaderTtlMs, updatedAt: now }));
+  }
+
+  function leaderAlive() {
+    const lock = readLock();
+    if (!lock || lock.id === TAB_ID) return false;
+    const updatedAt = Number(lock.updatedAt) || 0;
+    // Old versions wrote only "until"; treat them as stale so a reopened browser can take over.
+    if (!updatedAt) return false;
+    return Number(lock.until) > Date.now() && Date.now() - updatedAt < CFG.leaderTtlMs;
   }
 
   function claimLeader() {
     if (leaderAlive()) return false;
-    localStorage.setItem(LEADER_KEY, JSON.stringify({ id: TAB_ID, until: Date.now() + CFG.leaderTtlMs }));
+    writeLock();
     return true;
+  }
+
+  function startHeartbeat() {
+    clearInterval(heartbeatTimer);
+    heartbeatTimer = setInterval(() => {
+      if (!active || stopped) return;
+      const lock = readLock();
+      if (lock && lock.id === TAB_ID) writeLock();
+    }, CFG.leaderHeartbeatMs);
   }
 
   async function tick(firstRun) {
     if (stopped || !active) return;
     if (!claimLeader()) {
       setStatus('另一个标签页正在运行，此页待机');
-      return schedule(30000);
+      return schedule(10000);
     }
 
     try {
@@ -339,6 +363,7 @@
   function finish(reason) {
     stopped = true;
     clearTimeout(tickTimer);
+    clearInterval(heartbeatTimer);
     try { localStorage.removeItem(LEADER_KEY); } catch (_) {}
     lastError = reason;
     renderPanel();
@@ -351,9 +376,12 @@
     if (active) {
       stopped = false;
       lastError = '';
+      startHeartbeat();
       tick(true);
     } else {
       clearTimeout(tickTimer);
+      clearInterval(heartbeatTimer);
+      try { localStorage.removeItem(LEADER_KEY); } catch (_) {}
       renderPanel();
     }
   }
@@ -381,7 +409,8 @@
       renderPanel();
       return;
     }
-    setTimeout(() => tick(true), rand(8000, 18000));
+    startHeartbeat();
+    setTimeout(() => tick(true), rand(2000, 5000));
   }
 
   if (document.readyState === 'loading') {
