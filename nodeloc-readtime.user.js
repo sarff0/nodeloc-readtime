@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NodeLoc 阅读时长后台助手（稳妥版）
 // @namespace    local.nodeloc.readtime
-// @version      1.0.1
+// @version      1.0.2
 // @description  用真实帖子和低频率计时请求，在后台缓慢累计 NodeLoc 阅读时长。单标签运行，遇 429 自动退避。
 // @match        https://www.nodeloc.com/*
 // @run-at       document-idle
@@ -10,6 +10,8 @@
 // @grant        GM_setValue
 // @grant        GM_registerMenuCommand
 // @grant        GM_notification
+// @grant        GM_xmlhttpRequest
+// @connect      www.nodeloc.com
 // ==/UserScript==
 
 (function () {
@@ -68,6 +70,7 @@
   let tickTimer = null;
   let heartbeatTimer = null;
   let lastTickAt = 0;
+  let submittedCount = 0;
 
   function log(...args) {
     if (CFG.debug) console.log('[NodeLoc 阅读时长]', ...args);
@@ -75,10 +78,44 @@
 
   function isLoginRedirect(response) {
     try {
-      return response.redirected && new URL(response.url).pathname.startsWith('/login');
+      return !!response.url && new URL(response.url).pathname.startsWith('/login');
     } catch (_) {
       return false;
     }
+  }
+
+  function gmRequest(path, options = {}) {
+    return new Promise((resolve, reject) => {
+      if (typeof GM_xmlhttpRequest !== 'function') {
+        reject(new Error('GM_xmlhttpRequest 不可用'));
+        return;
+      }
+      const url = new URL(path, location.href).href;
+      GM_xmlhttpRequest({
+        method: options.method || 'GET',
+        url,
+        headers: Object.assign({ 'X-Requested-With': 'XMLHttpRequest' }, options.headers || {}),
+        data: options.body,
+        timeout: 30000,
+        onload: (result) => {
+          const headerMap = {};
+          String(result.responseHeaders || '').split(/\r?\n/).forEach((line) => {
+            const index = line.indexOf(':');
+            if (index > 0) headerMap[line.slice(0, index).trim().toLowerCase()] = line.slice(index + 1).trim();
+          });
+          resolve({
+            ok: result.status >= 200 && result.status < 300,
+            status: result.status,
+            url: result.finalUrl || url,
+            headers: { get: (name) => headerMap[String(name).toLowerCase()] || null },
+            text: async () => result.responseText || '',
+            json: async () => JSON.parse(result.responseText || '')
+          });
+        },
+        onerror: () => reject(new Error('GM_xmlhttpRequest 网络错误')),
+        ontimeout: () => reject(new Error('GM_xmlhttpRequest 超时'))
+      });
+    });
   }
 
   async function request(path, options = {}) {
@@ -86,7 +123,17 @@
       { 'X-Requested-With': 'XMLHttpRequest' },
       options.headers || {}
     );
-    const response = await fetch(path, Object.assign({ credentials: 'same-origin' }, options, { headers }));
+    let response;
+    try {
+      response = await fetch(path, Object.assign({ credentials: 'same-origin' }, options, { headers }));
+    } catch (error) {
+      log('fetch 失败，尝试 GM_xmlhttpRequest', path, error && error.message);
+      try {
+        response = await gmRequest(path, options);
+      } catch (fallbackError) {
+        throw new Error(`请求失败 ${path}: ${error.message || error} / ${fallbackError.message}`);
+      }
+    }
     if (isLoginRedirect(response)) throw new Error('LOGIN_REQUIRED');
     return response;
   }
@@ -115,7 +162,7 @@
 
     // /my/summary 会重定向到 /u/<username>/summary；从最终 URL 里拿用户名最稳。
     try {
-      const response = await fetch('/my/summary', { credentials: 'same-origin', redirect: 'follow' });
+      const response = await request('/my/summary', { redirect: 'follow' });
       const path = new URL(response.url).pathname;
       const match = path.match(/^\/u\/([^/]+)\//);
       if (match) {
@@ -318,6 +365,7 @@
       return schedule(10000);
     }
 
+    let progressWarning = '';
     try {
       if (!csrf) await getCsrf();
       if (!username) await resolveUsername();
@@ -330,10 +378,25 @@
           return;
         }
       }
+    } catch (error) {
+      if (String(error.message) === 'LOGIN_REQUIRED') {
+        setStatus('请先登录 NodeLoc');
+        finish('未登录');
+        return;
+      }
+      // A failed progress read must not stop the actual timing submission.
+      progressWarning = error;
+      lastSummaryAt = Date.now();
+      log('进度读取失败，继续计时', error);
+    }
 
+    try {
+      if (!csrf) await getCsrf();
+      const now = Date.now();
       const elapsedSec = lastTickAt ? Math.max(50, Math.min(70, (now - lastTickAt) / 1000)) : 60;
       await sendTiming(elapsedSec);
-      lastError = '';
+      submittedCount += 1;
+      lastError = progressWarning ? `已提交 ${submittedCount} 次；进度读取失败` : '';
       renderPanel();
     } catch (error) {
       if (String(error.message) === 'LOGIN_REQUIRED') {
